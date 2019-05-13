@@ -37,7 +37,7 @@ int colors[21] = {0, 128, 32768, 32896, 8388608, 8388736,8421376, 8421504, 64, 1
 unsigned int    getColor( const unsigned char * c );
 unsigned char * colorize( int * map, int W, int H, unsigned char * r );
 int             putColor( unsigned char * c, unsigned int cc );
-void            writePPM( const char* filename, int W, int H, unsigned char* data );
+//void            writePPM( const char* filename, int W, int H, unsigned char* data );
 void            writePNG( const char* filename, int W, int H, unsigned char* data );
 void            elbp(Mat& src, Mat &dst, int radius, int neighbors);
 float           calcDistance(int first, int second, vector<vector<float> > & lbp_superpixel, vector<vector<float> > & labxy_superpixel, int h, int w);
@@ -47,178 +47,183 @@ void		CalcEntropy(float * unary, int ix, int n);
 
 int main(int argc, char* argv[])
 {
-	clock_t start, finish;
-	const char * img_name = argv[1];
-	const char * img_fcn  = argv[2];
-	int w3        = atoi(argv[8]);
-	int std_lbp   = atoi(argv[9]);
-	int ifbibao = atoi(argv[10]);
-	int anb = atoi(argv[11]);
-	bool ifDiningTable = false;
+  if (argc < 12) {
+    printf("Usage: ./psp-crf [image.x] [unary.npy] [out.png] 0 [w1] [std_xy] [std_color] [w3] [std_lbp] [ifbibao] [anb]\n");
+    return 0;
+  }
+      
+        clock_t start, finish;
+        const char * img_name = argv[1];
+        const char * img_fcn  = argv[2];
+        int w3        = atoi(argv[8]);
+        int std_lbp   = atoi(argv[9]);
+        int ifbibao = atoi(argv[10]);
+        int anb = atoi(argv[11]);
+        bool ifDiningTable = false;
 
-	//-----------------------------------
-	// 01: read jpg to buffer
-	//-----------------------------------
-	start = clock();
-	Mat raw_image = imread(img_name , 1);
-	if(raw_image.empty())
-		printf("imread failed!\n");
-	int h = raw_image.rows;
-	int w = raw_image.cols;
-	int i(0), j(0);
-	int x(0), y(0);	//pixel:x,y
-	unsigned char * image_buffer = new unsigned char[ w * h * 4 ];	// BGRA char[4] 
-	unsigned int  * pbuff        = new unsigned int [ w * h ];		// BGRA int[]
-	for(i = 0; i < h; i++)
-	{	
-		for(j = 0; j < w; j++)
-		{	
-			*(image_buffer + i * w * 4 + j*4+0 ) = raw_image.at<Vec3b>(i,j).val[0];		//B
-			*(image_buffer + i * w * 4 + j*4+1 ) = raw_image.at<Vec3b>(i,j).val[1];		//G
-			*(image_buffer + i * w * 4 + j*4+2 ) = raw_image.at<Vec3b>(i,j).val[2];		//R
-			*(image_buffer + i * w * 4 + j*4+3 ) = 0;									//A=0
-		}
-	}	
+        //-----------------------------------
+        // 01: read jpg to buffer
+        //-----------------------------------
+        start = clock();
+        Mat raw_image = imread(img_name , 1);
+        if(raw_image.empty())
+                printf("imread failed!\n");
+        int h = raw_image.rows;
+        int w = raw_image.cols;
+        int i(0), j(0);
+        int x(0), y(0); //pixel:x,y
+        unsigned char * image_buffer = new unsigned char[ w * h * 4 ];  // BGRA char[4] 
+        unsigned int  * pbuff        = new unsigned int [ w * h ];              // BGRA int[]
+        for(i = 0; i < h; i++)
+        {       
+                for(j = 0; j < w; j++)
+                {       
+                        *(image_buffer + i * w * 4 + j*4+0 ) = raw_image.at<Vec3b>(i,j).val[0];         //B
+                        *(image_buffer + i * w * 4 + j*4+1 ) = raw_image.at<Vec3b>(i,j).val[1];         //G
+                        *(image_buffer + i * w * 4 + j*4+2 ) = raw_image.at<Vec3b>(i,j).val[2];         //R
+                        *(image_buffer + i * w * 4 + j*4+3 ) = 0;                                                                       //A=0
+                }
+        }       
 
-	// char[4] transfor to int[1]
-	// unsigned int (32 bits) to hold a pixel in ARGB format as follows:
-	for(i = j = 0; i < w*h; i++,j+=4 )
-	{
-			*(pbuff + i) = *(image_buffer+j+3) + \
-                      	(*(image_buffer+j+2)) * 256 + \
-                      	(*(image_buffer+j+1)) * 256 * 256 + \
-                      	(*(image_buffer+j+0)) * 256 * 256 * 256;
-	}
-	memset( image_buffer, 0, w*h*4 );
-		
-	//----------------------------------------------------
+        // char[4] transfor to int[1]
+        // unsigned int (32 bits) to hold a pixel in ARGB format as follows:
+        for(i = j = 0; i < w*h; i++,j+=4 )
+        {
+                        *(pbuff + i) = *(image_buffer+j+3) + \
+                        (*(image_buffer+j+2)) * 256 + \
+                        (*(image_buffer+j+1)) * 256 * 256 + \
+                        (*(image_buffer+j+0)) * 256 * 256 * 256;
+        }
+        memset( image_buffer, 0, w*h*4 );
+                
+        //----------------------------------------------------
     // 02: SLIC Initialize params & Perform on buffer
     //----------------------------------------------------
-	int    k_real  = 0;	 	//Truth number of superpixel, k_real>k generally.
-	double m       = 10;		//Compactness factor. use a value from 10 to 40. Default is 10.
-	int *  klabels = new int[ w * h ];		//lable map
-	int    numlabels(0);
-	SLIC segment;
-	segment.PerformSLICO_ForGivenK( pbuff, w, h, klabels, numlabels, NumberOfSuperpixel, m );
-	for(i = 0; i < w * h; i++)
-	    if( klabels[i] > k_real )
-        	k_real = klabels[i];
-	k_real += 1;
-	//printf("Get %d superpixels.\n",k_real);
+        int    k_real  = 0;             //Truth number of superpixel, k_real>k generally.
+        double m       = 10;            //Compactness factor. use a value from 10 to 40. Default is 10.
+        int *  klabels = new int[ w * h ];              //lable map
+        int    numlabels(0);
+        SLIC segment;
+        segment.PerformSLICO_ForGivenK( pbuff, w, h, klabels, numlabels, NumberOfSuperpixel, m );
+        for(i = 0; i < w * h; i++)
+            if( klabels[i] > k_real )
+                k_real = klabels[i];
+        k_real += 1;
+        //printf("Get %d superpixels.\n",k_real);
 
-	//------------------------------------------	
-	// 03: put pixel cluster into vector
-	//------------------------------------------
-	vector<vector<int> > superpixel;	// 0 ~ n superpixel
-	vector<int> i_superpixel;			// the pixel:x,y in the ith superpixel 
-   	float * raw_unary_all  = new float[ w * h * CLASS ];
+        //------------------------------------------    
+        // 03: put pixel cluster into vector
+        //------------------------------------------
+        vector<vector<int> > superpixel;        // 0 ~ n superpixel
+        vector<int> i_superpixel;                       // the pixel:x,y in the ith superpixel 
+        float * raw_unary_all  = new float[ w * h * CLASS ];
 
-	for(i = 0; i < k_real; i++)
-	{	
-		for(j = 0; j < w * h; j++)
-		{
-			if( klabels[j] == i )
-			{
-				y = j % w ;
-				x = (j - y ) / w;
-				i_superpixel.push_back(x);
-				i_superpixel.push_back(y);
-			}
-		}
-		if( i_superpixel.size() != 0 )
-			superpixel.push_back(i_superpixel);	
-		i_superpixel.clear();
-	}
+        for(i = 0; i < k_real; i++)
+        {       
+                for(j = 0; j < w * h; j++)
+                {
+                        if( klabels[j] == i )
+                        {
+                                y = j % w ;
+                                x = (j - y ) / w;
+                                i_superpixel.push_back(x);
+                                i_superpixel.push_back(y);
+                        }
+                }
+                if( i_superpixel.size() != 0 )
+                        superpixel.push_back(i_superpixel);     
+                i_superpixel.clear();
+        }
 
-	delete [] klabels;
+        delete [] klabels;
 
-	//----------------------------------
-	// 04: Unary from file.npy test
-	//----------------------------------
-	cnpy::NpyArray arr = cnpy::npy_load(img_fcn);	
-	if(arr.shape[1] != h || arr.shape[2] != w || arr.shape[0] != CLASS)
-		printf("\nimage not match npy.\n");	
-	float temp_score(0.0);
-	// Put into unary[0-21][1-21][2-21]...
-	for(i = 0; i < w*h; i++)
-	{	
-		for(j = 0; j < CLASS; j++)
-       	{		
-			temp_score = ((const float *)(arr.data))[ i + j * w * h ];
-			raw_unary_all[i * CLASS + j] = temp_score;
-		}
-		// softmax handle : exp(score)/sigma_exp(score)
-		SoftmaxFunc(raw_unary_all, i);
-	}
-	// clear arr memory
-	arr.destruct();	
+        //----------------------------------
+        // 04: Unary from file.npy test
+        //----------------------------------
+        cnpy::NpyArray arr = cnpy::npy_load(img_fcn);   
+        if(arr.shape[1] != h || arr.shape[2] != w || arr.shape[0] != CLASS)
+                printf("\nimage not match npy.\n");     
+        float temp_score(0.0);
+        // Put into unary[0-21][1-21][2-21]...
+        for(i = 0; i < w*h; i++)
+        {       
+                for(j = 0; j < CLASS; j++)
+        {               
+                        temp_score = ((const float *)(arr.data))[ i + j * w * h ];
+                        raw_unary_all[i * CLASS + j] = temp_score;
+                }
+                // softmax handle : exp(score)/sigma_exp(score)
+                SoftmaxFunc(raw_unary_all, i);
+        }
+        // clear arr memory
+        arr.destruct(); 
 
-	vector<int> classifier_list;
-	for(j = 0; j < CLASS; j++)
-	{
-		temp_score = 0.0;
-		for(i = 0; i < w*h; i++)
-		{
-			// find the max p of the classifier
-			if(raw_unary_all[i*CLASS + j] > temp_score)
-				temp_score = raw_unary_all[i*CLASS + j];
-		}
-		//printf("the max p of the classifier-%d : %.6f\n", j, temp_score);
-		if (temp_score > classifier_min_p)
-			classifier_list.push_back(j);
-	}
-	
-	int CLASS_new = classifier_list.size();
-	//printf("select %d category\n", CLASS_new);
-	float * raw_unary  = new float[ w * h * CLASS_new ];
-	
-	// change mem_room up to run_time down
-	for(vector<int>::size_type ix = 0; ix < classifier_list.size(); ix++)
-	{
-		//printf("%d-", classifier_list[ix]);
-		for(i = 0; i < w*h; i++)
-			raw_unary[ i * CLASS_new + ix ] = raw_unary_all[ i * CLASS + classifier_list[ix] ];
-	}	
-	
-	delete[] raw_unary_all;
-	
-	// if exist dinning table class ? yes will vs background, no will nothing
-	j = -1;
-	for(vector<int>::size_type ix = 0; ix < classifier_list.size(); ix++){
-		if(classifier_list[ix] == 11){
-			j = ix;	
-			break;}
-	}
-	// j == -1 means may table;
-	if( j != -1 )	{
-		for( i=0; i<w*h; i++ ){
-			if( raw_unary[ i * CLASS_new + j ] > 0.90 ){
-				printf("This image must have Dinning-Table:%s = %f\n", argv[1], raw_unary[i*CLASS_new+j]);
-				ifDiningTable = true;	break;
-			}
-		}
-	}	
-		
-#if 1	
-	// calc entorpy of every spxl, expand superpixle<>
-	int firstlabel = 0;
-	int first;
-	int second;
-	vector<int>::iterator it1;
-	vector<int>::iterator it2;
-	for(i = 0; i < k_real; i++)	
-	{
-		i_superpixel.clear();
-		firstlabel = 0;	first = second = 0;
-		for(vector<int>::size_type ix = 0; ix < superpixel[i].size(); ix+=2)
-		{
-			x = superpixel[i][ix];	
-			y = superpixel[i][ix+1];
-			for(j = 0; j < CLASS_new; j++)
-			{
-				if( raw_unary[(x*w+y)*CLASS_new+j] > TwoAttr )	
-				{
-					if( firstlabel == 0) { first = j; firstlabel = 1; }
+        vector<int> classifier_list;
+        for(j = 0; j < CLASS; j++)
+        {
+                temp_score = 0.0;
+                for(i = 0; i < w*h; i++)
+                {
+                        // find the max p of the classifier
+                        if(raw_unary_all[i*CLASS + j] > temp_score)
+                                temp_score = raw_unary_all[i*CLASS + j];
+                }
+                //printf("the max p of the classifier-%d : %.6f\n", j, temp_score);
+                if (temp_score > classifier_min_p)
+                        classifier_list.push_back(j);
+        }
+        
+        int CLASS_new = classifier_list.size();
+        //printf("select %d category\n", CLASS_new);
+        float * raw_unary  = new float[ w * h * CLASS_new ];
+        
+        // change mem_room up to run_time down
+        for(vector<int>::size_type ix = 0; ix < classifier_list.size(); ix++)
+        {
+                //printf("%d-", classifier_list[ix]);
+                for(i = 0; i < w*h; i++)
+                        raw_unary[ i * CLASS_new + ix ] = raw_unary_all[ i * CLASS + classifier_list[ix] ];
+        }       
+        
+        delete[] raw_unary_all;
+        
+        // if exist dinning table class ? yes will vs background, no will nothing
+        j = -1;
+        for(vector<int>::size_type ix = 0; ix < classifier_list.size(); ix++){
+                if(classifier_list[ix] == 11){
+                        j = ix; 
+                        break;}
+        }
+        // j == -1 means may table;
+        if( j != -1 )   {
+                for( i=0; i<w*h; i++ ){
+                        if( raw_unary[ i * CLASS_new + j ] > 0.90 ){
+                                printf("This image must have Dinning-Table:%s = %f\n", argv[1], raw_unary[i*CLASS_new+j]);
+                                ifDiningTable = true;   break;
+                        }
+                }
+        }       
+                
+#if 1   
+        // calc entorpy of every spxl, expand superpixle<>
+        int firstlabel = 0;
+        int first;
+        int second;
+        vector<int>::iterator it1;
+        vector<int>::iterator it2;
+        for(i = 0; i < k_real; i++)     
+        {
+                i_superpixel.clear();
+                firstlabel = 0; first = second = 0;
+                for(vector<int>::size_type ix = 0; ix < superpixel[i].size(); ix+=2)
+                {
+                        x = superpixel[i][ix];  
+                        y = superpixel[i][ix+1];
+                        for(j = 0; j < CLASS_new; j++)
+                        {
+                                if( raw_unary[(x*w+y)*CLASS_new+j] > TwoAttr )  
+                                {
+        				if( firstlabel == 0) { first = j; firstlabel = 1; }
 					if( firstlabel == 1 && j != first )
 						second++;
 				}
@@ -327,9 +332,9 @@ int main(int argc, char* argv[])
         float range[]   = {0, 256};
         const float * ranges[] = {range};
         int channels[]  = {0};
-		int rect_w(0), rect_h(0);
-		int sizeofrect(0);
-		bool good;
+        int rect_w(0), rect_h(0);
+        int sizeofrect(0);
+        bool good;
         for(vector<vector<int> >::size_type ix = 0; ix < superpixel.size(); ix++)       //superpixel label number
         {
                 max_x = max_y = -1;
@@ -510,9 +515,9 @@ unsigned char * colorize( int * map, int W, int H, unsigned char * r )
 }
 
 // 将数组存为PPM图
-void writePPM ( const char* filename, int W, int H, unsigned char* data )
-{
-}
+//void writePPM ( const char* filename, int W, int H, unsigned char* data )
+//{
+//}
 
 void SoftmaxFunc(float * raw_score, int i)
 {
